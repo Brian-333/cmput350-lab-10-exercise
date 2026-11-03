@@ -38,7 +38,17 @@ int main() {
     fullscreenTriangle[2].texCoords = {0, 2};
     // load vertex and fragment shaders:
     sf::Shader shader(std::filesystem::path{"main.vert"}, std::filesystem::path{"main.frag"});
-    // ... other shaders can go here...
+    sf::Shader copyShader(std::filesystem::path{"main.vert"}, std::filesystem::path{"copy.frag"});
+
+    // Dual buffer for temporal reprojection / TAA
+    sf::RenderTexture buffers[2];
+    if (!buffers[0].resize(window.getSize()) || !buffers[1].resize(window.getSize())) {
+        std::cerr << "Failed to create render textures\n";
+        return 1;
+    }
+    buffers[0].setSmooth(true);
+    buffers[1].setSmooth(true);
+    int writeIdx = 0;
 
     sf::Font openSansFont(EmbeddedFonts::OpenSans_SemiBold_ttf,
                           EmbeddedFonts::OpenSans_SemiBold_ttf_len);
@@ -56,6 +66,12 @@ int main() {
     float worldUnitsPerPixel = 1.f / window.getSize().y;
     sf::Vector2f camCenterWorld{0.f, 0.f};
     int maxIters = INIT_ITERS;
+
+    sf::Vector2f previousWindowSizePixels{sf::Vector2f(window.getSize())};
+    sf::Vector2f previousCamCenterWorld = camCenterWorld;
+    float previousCamWorldUnitsPerPixel = worldUnitsPerPixel;
+    sf::Vector2f previousC = c;
+    bool firstFrame = true;
 
     int i = -1;
     while (window.isOpen()) {
@@ -113,18 +129,43 @@ int main() {
         } else {
             maxIters = std::min(maxIters * 2, TRUE_MAX_ITERS);
         }
-        // TODO set shader uniforms here...
 
+        const bool cChanged = firstFrame || moved || (c != previousC);
+
+        auto& writeBuf = buffers[writeIdx];
+        auto& readBuf = buffers[1 - writeIdx];
+
+        shader.setUniform("MAX_ITERS", maxIters);
+        shader.setUniform("windowSizePixels", sf::Vector2f(window.getSize()));
+        shader.setUniform("camCenterWorld", camCenterWorld);
+        shader.setUniform("camWorldUnitsPerPixel", worldUnitsPerPixel);
+        shader.setUniform("c", c);
+        shader.setUniform("previousWindowSizePixels", previousWindowSizePixels);
+        shader.setUniform("previousCamCenterWorld", previousCamCenterWorld);
+        shader.setUniform("previousCamWorldUnitsPerPixel", previousCamWorldUnitsPerPixel);
+        shader.setUniform("previousFrame", readBuf.getTexture());
+        shader.setUniform("cChanged", cChanged ? 1 : 0);
+
+        writeBuf.clear(sf::Color::Black);
+        writeBuf.draw(fullscreenTriangle, &shader);
+        writeBuf.display();
+
+        copyShader.setUniform("toCopy", writeBuf.getTexture());
         window.clear(sf::Color::Black);
-        // TODO something.draw(fullscreenTriangle, &shader);
-        // this might change as you finish more parts!
+        window.draw(fullscreenTriangle, &copyShader);
+
         cText.setString("c = (" + std::to_string(c.x) + ", " + std::to_string(c.y) + ")");
         cTextShadow.setString("c = (" + std::to_string(c.x) + ", " + std::to_string(c.y) + ")");
         window.draw(cTextShadow);
         window.draw(cText);
         window.display();
 
-        // TODO (reprojection)... update "old" states
+        writeIdx = 1 - writeIdx;
+        previousWindowSizePixels = sf::Vector2f(window.getSize());
+        previousCamCenterWorld = camCenterWorld;
+        previousCamWorldUnitsPerPixel = worldUnitsPerPixel;
+        previousC = c;
+        firstFrame = false;
     }
     return 0;
 }
